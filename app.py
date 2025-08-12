@@ -345,7 +345,7 @@ class SimpleFileAnalyzer:
 
     def generate_query_code(self, question: str, df: pd.DataFrame, dataset_name: str) -> str:
         """
-        Generate Python code to answer the question with better column matching
+        Generate Python code to answer the question with better column matching and clean output formatting
         """
         # Get column info including both original and English names
         columns = list(df.columns)
@@ -378,30 +378,33 @@ class SimpleFileAnalyzer:
 
         English to original column mapping: {english_to_original}
 
-        IMPORTANT RULES:
+        CRITICAL RULES:
         1. Use 'df' as the dataframe variable (already loaded)
         2. ALWAYS use the ORIGINAL column names (in quotes) when accessing columns
-        3. Store final answer in variable 'result'
-        4. Handle missing data appropriately
-        5. For text filtering, be case-insensitive when possible
-        6. If filtering by specific values, consider partial matches for text columns
-        7. Use .dropna() when necessary to handle missing values
+        3. Store final answer in variable 'result' as a SIMPLE STRING or NUMBER
+        4. Convert all answers to human-readable format using regular Python types
+        5. For min/max questions, Eg:format as: "State with minimum: Delaware ($3,543.45), State with maximum: California ($1,161,720.84)"
+        6. Always convert numpy types to regular Python types: int(value), float(value), str(value)
+        7. Format currency values with commas and dollar signs using :,.2f
+        8. Handle missing data appropriately with .dropna() or .fillna()
+        9. For text filtering, be case-insensitive when possible
 
-        Examples:
-        - For "manager of central region": df[df['Region'].str.lower() == 'central']['Manager'].dropna().values
-        - For totals: result = df['column_name'].sum()
-        - For counts: result = len(df[df['column'] == 'value'])
-        - For filtering: filtered_df = df[df['column'].str.contains('value', case=False, na=False)]
+        Examples of GOOD result formatting:
+        - For min/max: result = f"Minimum: {{min_state}} (${{min_value:,.2f}}), Maximum: {{max_state}} (${{max_value:,.2f}})"
+        - For totals: result = f"Total sales: ${{total_value:,.2f}}"
+        - For counts: result = f"Count: {{count_value:,}}"
+        - For lists: result = ", ".join([str(x) for x in values])
+        - For averages: result = f"Average: ${{avg_value:,.2f}}"
 
-        Generate ONLY the Python code that will work:
+        Generate ONLY the Python code that produces a clean, readable result:
         """
 
         try:
             response = self.client.chat.completions.create(
-                model="gpt-4.1",
+                model="gpt-4o-mini",
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.1,
-                max_tokens=300
+                max_tokens=400
             )
 
             code = response.choices[0].message.content.strip()
@@ -422,52 +425,51 @@ class SimpleFileAnalyzer:
             return '\n'.join(clean_lines)
 
         except Exception as e:
-            # More intelligent fallback based on question analysis
+            # Improved fallback with better formatting
             question_lower = question.lower()
             
             # Try to identify the intent and relevant columns
-            if any(word in question_lower for word in ['manager', 'who is', 'name']):
-                # Looking for a person/manager
-                manager_cols = [col for col in columns if 'manager' in col.lower()]
-                region_cols = [col for col in columns if any(word in col.lower() for word in ['region', 'area', 'location'])]
-                
-                if manager_cols and region_cols:
-                    manager_col = manager_cols[0]
-                    region_col = region_cols[0]
+            if any(word in question_lower for word in ['min', 'max', 'minimum', 'maximum']):
+                # Looking for min/max values
+                if numeric_cols and text_cols:
+                    numeric_col = numeric_cols[0]
+                    group_col = text_cols[0]
                     
                     return f"""
 try:
-    # Look for central region manager
-    central_matches = df[df['{region_col}'].str.lower().str.contains('central', na=False)]
-    if len(central_matches) > 0:
-        result = central_matches['{manager_col}'].dropna().iloc[0] if len(central_matches['{manager_col}'].dropna()) > 0 else "No manager found"
-    else:
-        result = "Central region not found"
+    # Group by {group_col} and sum {numeric_col}
+    grouped = df.groupby('{group_col}')['{numeric_col}'].sum()
+    min_idx = grouped.idxmin()
+    max_idx = grouped.idxmax()
+    min_val = float(grouped.min())
+    max_val = float(grouped.max())
+    
+    result = f"Minimum: {{min_idx}} (${{min_val:,.2f}}), Maximum: {{max_idx}} (${{max_val:,.2f}})"
+except Exception as e:
+    result = f"Error in analysis: {{str(e)}}"
+"""
+            
+            elif any(word in question_lower for word in ['total', 'sum']):
+                if numeric_cols:
+                    numeric_col = numeric_cols[0]
+                    return f"""
+try:
+    total_value = float(df['{numeric_col}'].sum())
+    result = f"Total: ${{total_value:,.2f}}"
 except Exception as e:
     result = f"Error: {{str(e)}}"
 """
             
-            # Generic fallback
+            # Generic fallback with better formatting
             return f"""
 try:
-    # Basic analysis based on question
-    question_lower = "{question.lower()}"
-    
-    if 'total' in question_lower or 'sum' in question_lower:
-        numeric_cols = df.select_dtypes(include=[np.number]).columns
-        if len(numeric_cols) > 0:
-            result = df[numeric_cols[0]].sum()
-        else:
-            result = f"No numeric columns found. Available columns: {{', '.join(df.columns.tolist())}}"
-    
-    elif 'count' in question_lower or 'how many' in question_lower:
-        result = len(df)
-    
+    # Basic analysis with clean formatting
+    if len(df) > 0:
+        result = f"Dataset contains {{len(df):,}} rows and {{len(df.columns)}} columns"
     else:
-        result = f"Dataset has {{len(df)}} rows and {{len(df.columns)}} columns. Available columns: {{', '.join(df.columns.tolist())}}"
-
+        result = "Dataset is empty"
 except Exception as e:
-    result = f"Error in analysis: {{str(e)}}"
+    result = f"Error: {{str(e)}}"
 """
 
     def generate_insights_and_suggestions(self, question: str, answer: str, df: pd.DataFrame) -> str:
@@ -551,9 +553,30 @@ SUGGESTIONS:
 
             exec(code, {"__builtins__": safe_builtins}, local_vars)
 
-            # Get the result
+            # Get the result and clean it
             if 'result' in local_vars:
-                answer = str(local_vars['result'])
+                raw_answer = local_vars['result']
+                
+                # Clean up the answer if it's a complex object
+                if isinstance(raw_answer, dict):
+                    # Convert dict to readable format
+                    formatted_parts = []
+                    for key, value in raw_answer.items():
+                        if isinstance(value, dict):
+                            for sub_key, sub_value in value.items():
+                                if hasattr(sub_value, 'item'):  # numpy type
+                                    sub_value = sub_value.item()
+                                formatted_parts.append(f"{key} {sub_key}: {sub_value}")
+                        else:
+                            if hasattr(value, 'item'):  # numpy type
+                                value = value.item()
+                            formatted_parts.append(f"{key}: {value}")
+                    answer = ", ".join(formatted_parts)
+                elif hasattr(raw_answer, 'dtype'):  # numpy type
+                    answer = str(raw_answer.item() if hasattr(raw_answer, 'item') else raw_answer)
+                else:
+                    answer = str(raw_answer)
+                
                 result_parts.append(f"\nANSWER: {answer}")
 
                 # Generate insights and suggestions
@@ -566,7 +589,15 @@ SUGGESTIONS:
 
         except Exception as e:
             result_parts.append(f"\nError: {str(e)}")
-            result_parts.append(f"\nGenerated code: {code}")
+            result_parts.append(f"\nGenerated code:\n{code}")
+            
+            # Try a simple fallback
+            try:
+                result_parts.append(f"\nFallback: Dataset has {len(df)} rows and {len(df.columns)} columns")
+                result_parts.append(f"Columns: {', '.join(df.columns.tolist()[:5])}")
+            except:
+                pass
+                
             return "\n".join(result_parts)
 
 # Streamlit App
