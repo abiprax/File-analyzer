@@ -5,3 +5,4 @@ openai
 langdetect
 langgraph
 langchain-core
+openpyxl
