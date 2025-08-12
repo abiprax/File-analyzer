@@ -512,7 +512,7 @@ except Exception as e:
 
         try:
             response = self.client.chat.completions.create(
-                model="gpt-4o-mini",
+                model="gpt-4.1",
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.3,
                 max_tokens=300
