@@ -35,7 +35,7 @@ class SimpleFileAnalyzer:
                     # Load CSV file
                     df = pd.read_csv(uploaded_file)
                     self.datasets[filename] = df
-                    results.append(f" Loaded CSV: {filename} ({len(df)} rows, {len(df.columns)} columns)")
+                    results.append(f"Loaded CSV: {filename} ({len(df)} rows, {len(df.columns)} columns)")
 
                 elif filename.endswith(('.xlsx', '.xls')):
                     # Load Excel file with all sheets
@@ -44,14 +44,14 @@ class SimpleFileAnalyzer:
                         df = pd.read_excel(uploaded_file, sheet_name=sheet_name)
                         dataset_name = f"{filename}_{sheet_name}"
                         self.datasets[dataset_name] = df
-                        results.append(f" Loaded Excel sheet: {sheet_name} ({len(df)} rows, {len(df.columns)} columns)")
+                        results.append(f"Loaded Excel sheet: {sheet_name} ({len(df)} rows, {len(df.columns)} columns)")
 
             except Exception as e:
-                results.append(f" Error loading {filename}: {str(e)}")
+                results.append(f"Error loading {filename}: {str(e)}")
 
         if self.datasets:
             analysis_result = self.analyze_all_datasets()
-            results.append(f"\n Total datasets loaded: {len(self.datasets)}")
+            results.append(f"\nTotal datasets loaded: {len(self.datasets)}")
             results.append(analysis_result)
 
         return "\n".join(results)
@@ -326,70 +326,82 @@ class SimpleFileAnalyzer:
         """
         question_lower = question.lower()
 
-        # Look for dataset-specific keywords
+        # Look for dataset-specific keywords by checking both original and English column names
         for dataset_name, df in self.datasets.items():
-            # Check if any column names are mentioned in the question
+            # Check original column names
             for col in df.columns:
                 if col.lower() in question_lower or col.lower().replace(' ', '') in question_lower:
                     return (dataset_name, df)
+            
+            # Check English column names if analysis is available
+            if dataset_name in self.analysis_results and 'columns' in self.analysis_results[dataset_name]:
+                for col, analysis in self.analysis_results[dataset_name]['columns'].items():
+                    english_name = analysis.get('english_name', '').lower()
+                    if english_name and (english_name in question_lower or english_name.replace(' ', '') in question_lower):
+                        return (dataset_name, df)
 
         # If no specific match, return the largest dataset
         return max(self.datasets.items(), key=lambda x: len(x[1]) * len(x[1].columns))
 
     def generate_query_code(self, question: str, df: pd.DataFrame, dataset_name: str) -> str:
         """
-        Generate Python code to answer the question
+        Generate Python code to answer the question with better column matching
         """
-        # Get column info
+        # Get column info including both original and English names
         columns = list(df.columns)
         dtypes = {col: str(dtype) for col, dtype in df.dtypes.items()}
         numeric_cols = [col for col, dtype in dtypes.items() if 'int' in dtype or 'float' in dtype]
         text_cols = [col for col, dtype in dtypes.items() if 'object' in dtype]
         date_cols = [col for col, dtype in dtypes.items() if 'datetime' in dtype]
 
-        # Get English descriptions for context (if available)
-        english_descriptions = {}
+        # Create mapping of English names to original column names
+        english_to_original = {}
+        column_info = []
         if dataset_name in self.analysis_results and 'columns' in self.analysis_results[dataset_name]:
-            for col, analysis in self.analysis_results[dataset_name]['columns'].items():
-                english_descriptions[col] = f"{analysis['english_name']}: {analysis['description']}"
+            for orig_col, analysis in self.analysis_results[dataset_name]['columns'].items():
+                english_name = analysis.get('english_name', orig_col)
+                english_to_original[english_name.lower()] = orig_col
+                column_info.append(f"{english_name} -> '{orig_col}' ({analysis.get('description', 'No description')})")
 
         prompt = f"""
-        Generate Python code to answer: "{question}"
+        Generate Python code to answer this question: "{question}"
 
         Dataset: {dataset_name}
-        Columns: {columns}
+        Available columns with mappings:
+        {chr(10).join(column_info)}
+
+        Original column names: {columns}
         Data types: {dtypes}
         Numeric columns: {numeric_cols}
-        Text columns: {text_cols}
+        Text/categorical columns: {text_cols}
         Date columns: {date_cols}
-        Column descriptions: {english_descriptions}
+
+        English to original column mapping: {english_to_original}
 
         IMPORTANT RULES:
         1. Use 'df' as the dataframe variable (already loaded)
-        2. DO NOT import anything - pandas is already available as 'pd'
+        2. ALWAYS use the ORIGINAL column names (in quotes) when accessing columns
         3. Store final answer in variable 'result'
-        4. Use only basic pandas operations
-        5. Handle missing data with .dropna() if needed
-        6. NEVER use .str accessor unless you're sure the column contains strings
-        7. For date columns, use pd.to_datetime() first if needed
-        8. For filtering dates, convert to datetime format first
-        9. Always check data types before using string methods
+        4. Handle missing data appropriately
+        5. For text filtering, be case-insensitive when possible
+        6. If filtering by specific values, consider partial matches for text columns
+        7. Use .dropna() when necessary to handle missing values
 
-        Example patterns:
-        - For totals: result = df['column'].sum()
-        - For date filtering: df['date_col'] = pd.to_datetime(df['date_col']); filtered = df[df['date_col'].dt.year == 2014]
-        - For text filtering: result = df[df['text_col'] == 'value'] (only if column is actually text)
-        - For string operations: result = df[df['col'].astype(str).str.contains('text')]
+        Examples:
+        - For "manager of central region": df[df['Region'].str.lower() == 'central']['Manager'].dropna().values
+        - For totals: result = df['column_name'].sum()
+        - For counts: result = len(df[df['column'] == 'value'])
+        - For filtering: filtered_df = df[df['column'].str.contains('value', case=False, na=False)]
 
-        Generate ONLY the Python code:
+        Generate ONLY the Python code that will work:
         """
 
         try:
             response = self.client.chat.completions.create(
-                model="gpt-4o-mini",
+                model="gpt-4.1",
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.1,
-                max_tokens=250
+                max_tokens=300
             )
 
             code = response.choices[0].message.content.strip()
@@ -410,41 +422,49 @@ class SimpleFileAnalyzer:
             return '\n'.join(clean_lines)
 
         except Exception as e:
-            # Enhanced fallback with better data type handling
+            # More intelligent fallback based on question analysis
+            question_lower = question.lower()
+            
+            # Try to identify the intent and relevant columns
+            if any(word in question_lower for word in ['manager', 'who is', 'name']):
+                # Looking for a person/manager
+                manager_cols = [col for col in columns if 'manager' in col.lower()]
+                region_cols = [col for col in columns if any(word in col.lower() for word in ['region', 'area', 'location'])]
+                
+                if manager_cols and region_cols:
+                    manager_col = manager_cols[0]
+                    region_col = region_cols[0]
+                    
+                    return f"""
+try:
+    # Look for central region manager
+    central_matches = df[df['{region_col}'].str.lower().str.contains('central', na=False)]
+    if len(central_matches) > 0:
+        result = central_matches['{manager_col}'].dropna().iloc[0] if len(central_matches['{manager_col}'].dropna()) > 0 else "No manager found"
+    else:
+        result = "Central region not found"
+except Exception as e:
+    result = f"Error: {{str(e)}}"
+"""
+            
+            # Generic fallback
             return f"""
 try:
-    # Safer approach that handles different data types
-    result_df = df.copy()
-
     # Basic analysis based on question
     question_lower = "{question.lower()}"
-
+    
     if 'total' in question_lower or 'sum' in question_lower:
         numeric_cols = df.select_dtypes(include=[np.number]).columns
         if len(numeric_cols) > 0:
             result = df[numeric_cols[0]].sum()
         else:
             result = f"No numeric columns found. Available columns: {{', '.join(df.columns.tolist())}}"
-
+    
     elif 'count' in question_lower or 'how many' in question_lower:
         result = len(df)
-
-    elif 'average' in question_lower or 'mean' in question_lower:
-        numeric_cols = df.select_dtypes(include=[np.number]).columns
-        if len(numeric_cols) > 0:
-            result = df[numeric_cols[0]].mean()
-        else:
-            result = "No numeric columns found for average calculation"
-
-    elif 'max' in question_lower or 'maximum' in question_lower or 'highest' in question_lower:
-        numeric_cols = df.select_dtypes(include=[np.number]).columns
-        if len(numeric_cols) > 0:
-            result = df[numeric_cols[0]].max()
-        else:
-            result = "No numeric columns found for maximum calculation"
-
+    
     else:
-        result = f"Dataset has {{len(df)}} rows and {{len(df.columns)}} columns. Columns: {{', '.join(df.columns.tolist()[:10])}}"
+        result = f"Dataset has {{len(df)}} rows and {{len(df.columns)}} columns. Available columns: {{', '.join(df.columns.tolist())}}"
 
 except Exception as e:
     result = f"Error in analysis: {{str(e)}}"
@@ -553,7 +573,7 @@ SUGGESTIONS:
 def main():
     st.set_page_config(
         page_title="Simple File Analyzer", 
-        page_icon="",
+        page_icon=None,
         layout="wide",
         initial_sidebar_state="expanded"
     )
@@ -561,34 +581,29 @@ def main():
     st.title("Simple File Analyzer")
     st.markdown("Upload CSV or Excel files and ask questions about your data using AI! All column names and descriptions will be in English.")
 
+    # Get API key from Streamlit secrets
+    try:
+        api_key = st.secrets["OPENAI_API_KEY"]
+    except:
+        st.error("OpenAI API key not found in Streamlit secrets. Please add OPENAI_API_KEY to your secrets.")
+        return
+
     # Initialize session state
     if 'analyzer' not in st.session_state:
-        st.session_state.analyzer = None
+        try:
+            st.session_state.analyzer = SimpleFileAnalyzer(api_key)
+        except Exception as e:
+            st.error(f"Error initializing analyzer: {str(e)}")
+            return
     
     if 'analysis_done' not in st.session_state:
         st.session_state.analysis_done = False
 
-    # Sidebar for API Key and File Upload
+    # Sidebar for File Upload
     with st.sidebar:
         st.header("Configuration")
+        st.success("API Key loaded from secrets")
         
-        # API Key Input
-        api_key = st.text_input(
-            "OpenAI API Key", 
-            type="password",
-            placeholder="Enter your OpenAI API key"
-        )
-        
-        if st.button("Initialize Analyzer", type="primary"):
-            if api_key:
-                try:
-                    st.session_state.analyzer = SimpleFileAnalyzer(api_key)
-                    st.success(" Analyzer initialized successfully!")
-                except Exception as e:
-                    st.error(f" Error initializing analyzer: {str(e)}")
-            else:
-                st.error("Please enter your OpenAI API key.")
-
         st.header("File Upload")
         
         # File Upload
@@ -606,10 +621,7 @@ def main():
                     st.session_state.analysis_result = result
 
     # Main Content Area
-    if st.session_state.analyzer is None:
-        st.info("Please initialize the analyzer with your OpenAI API key in the sidebar.")
-        
-    elif not uploaded_files:
+    if not uploaded_files:
         st.info("Please upload CSV or Excel files in the sidebar.")
         
     else:
@@ -668,7 +680,7 @@ def main():
     st.markdown(
         """
         <div style='text-align: center; color: #666;'>
-            <p>Built with using Streamlit and OpenAI | Upload your data and start exploring!</p>
+            <p>Built with Streamlit and OpenAI | Upload your data and start exploring!</p>
         </div>
         """, 
         unsafe_allow_html=True
