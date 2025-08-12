@@ -1,0 +1,7 @@
+streamlit
+openai
+langdetect
+pandas
+numpy
+openpyxl
+xlrd
