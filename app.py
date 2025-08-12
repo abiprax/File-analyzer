@@ -552,7 +552,9 @@ SUGGESTIONS:
             local_vars = {"df": df, "pd": pd, "np": np}
             safe_builtins = {
                 "len": len, "str": str, "int": int, "float": float, "max": max, "min": min,
-                "sum": sum, "round": round, "abs": abs, "print": print, "any": any
+                "sum": sum, "round": round, "abs": abs, "print": print, "any": any,
+                "enumerate": enumerate, "list": list, "dict": dict, "tuple": tuple,
+                "range": range, "zip": zip
             }
 
             exec(code, {"__builtins__": safe_builtins}, local_vars)
