@@ -379,29 +379,32 @@ class SimpleFileAnalyzer:
         English to original column mapping: {english_to_original}
 
         CRITICAL RULES:
-        1. Use 'df' as the dataframe variable (already loaded)
+        1. The dataframe 'df' is ALREADY LOADED - DO NOT try to read any CSV files with pd.read_csv()
         2. ALWAYS use the ORIGINAL column names (in quotes) when accessing columns
         3. Store final answer in variable 'result' as a SIMPLE STRING or NUMBER
         4. Convert all answers to human-readable format using regular Python types
-        5. For min/max questions, Eg:format as: "State with minimum: Delaware ($3,543.45), State with maximum: California ($1,161,720.84)"
-        6. Always convert numpy types to regular Python types: int(value), float(value), str(value)
-        7. Format currency values with commas and dollar signs using :,.2f
-        8. Handle missing data appropriately with .dropna() or .fillna()
-        9. For text filtering, be case-insensitive when possible
+        5. Handle missing data appropriately with .dropna() or .fillna()
+        6. For text filtering, be case-insensitive when possible
+        7. NEVER use dollar signs ($) - format all numbers without currency symbols
+        8. Use simple number formatting with commas: {{value:,.2f}} or {{value:,}}
 
         Examples of GOOD result formatting:
-        - For min/max: result = f"Minimum: {{min_state}} (${{min_value:,.2f}}), Maximum: {{max_state}} (${{max_value:,.2f}})"
-        - For totals: result = f"Total sales: ${{total_value:,.2f}}"
+        - For min/max: result = f"Minimum: {{min_category}} ({{min_value:,.2f}}), Maximum: {{max_category}} ({{max_value:,.2f}})"
+        - For totals: result = f"Total: {{total_value:,.2f}}"
         - For counts: result = f"Count: {{count_value:,}}"
-        - For lists: result = ", ".join([str(x) for x in values])
-        - For averages: result = f"Average: ${{avg_value:,.2f}}"
+        - For categories: result = f"Category with lowest value: {{category}} ({{value:,.2f}})"
 
-        Generate ONLY the Python code that produces a clean, readable result:
+        IMPORTANT: 
+        - DO NOT include any pd.read_csv() or file reading code
+        - The dataframe 'df' is already available to use
+        - NEVER use $ symbol in any formatting
+
+        Generate ONLY the Python code that works with the existing dataframe:
         """
 
         try:
             response = self.client.chat.completions.create(
-                model="gpt-4o-mini",
+                model="gpt-4.1",
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.1,
                 max_tokens=400
@@ -444,7 +447,7 @@ try:
     min_val = float(grouped.min())
     max_val = float(grouped.max())
     
-    result = f"Minimum: {{min_idx}} (${{min_val:,.2f}}), Maximum: {{max_idx}} (${{max_val:,.2f}})"
+    result = f"Minimum: {{min_idx}} ({{min_val:,.2f}}), Maximum: {{max_idx}} ({{max_val:,.2f}})"
 except Exception as e:
     result = f"Error in analysis: {{str(e)}}"
 """
@@ -452,10 +455,11 @@ except Exception as e:
             elif any(word in question_lower for word in ['total', 'sum']):
                 if numeric_cols:
                     numeric_col = numeric_cols[0]
+                    
                     return f"""
 try:
     total_value = float(df['{numeric_col}'].sum())
-    result = f"Total: ${{total_value:,.2f}}"
+    result = f"Total: {{total_value:,.2f}}"
 except Exception as e:
     result = f"Error: {{str(e)}}"
 """
@@ -508,7 +512,7 @@ except Exception as e:
 
         try:
             response = self.client.chat.completions.create(
-                model="gpt-4.1",
+                model="gpt-4o-mini",
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.3,
                 max_tokens=300
@@ -548,7 +552,7 @@ SUGGESTIONS:
             local_vars = {"df": df, "pd": pd, "np": np}
             safe_builtins = {
                 "len": len, "str": str, "int": int, "float": float, "max": max, "min": min,
-                "sum": sum, "round": round, "abs": abs, "print": print
+                "sum": sum, "round": round, "abs": abs, "print": print, "any": any
             }
 
             exec(code, {"__builtins__": safe_builtins}, local_vars)
