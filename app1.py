@@ -703,7 +703,7 @@ def main():
     )
 
     st.title("File Analyzer")
-    st.markdown("Upload CSV or Excel files and ask questions about your data using AI with LangGraph! All column names and descriptions will be in English.")
+    st.markdown("")
 
     # Get API key from Streamlit secrets
     try:
@@ -756,7 +756,7 @@ def main():
             st.header("Analysis Results")
             if st.session_state.analysis_done:
                 st.text_area(
-                    "File Analysis (English Descriptions)",
+                    "English Descriptions:",
                     value=st.session_state.analysis_result,
                     height=400,
                     key="analysis_output"
@@ -804,7 +804,7 @@ def main():
     st.markdown(
         """
         <div style='text-align: center; color: #666;'>
-            <p>Built with Streamlit, OpenAI, and LangGraph | Upload your data and start exploring!</p>
+            <p>Built with Streamlit | Upload your data and start exploring!</p>
         </div>
         """, 
         unsafe_allow_html=True
