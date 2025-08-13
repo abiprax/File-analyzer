@@ -303,7 +303,7 @@ class LangGraphFileAnalyzer:
 
         try:
             response = self.client.chat.completions.create(
-                model="gpt-4o-mini",
+                model="gpt-4.1",
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.1,
                 max_tokens=150
@@ -696,13 +696,13 @@ SUGGESTIONS:
 # Streamlit App (same as before, just using LangGraphFileAnalyzer)
 def main():
     st.set_page_config(
-        page_title="LangGraph File Analyzer", 
+        page_title="File Analyzer", 
         page_icon=None,
         layout="wide",
         initial_sidebar_state="expanded"
     )
 
-    st.title("LangGraph File Analyzer")
+    st.title("File Analyzer")
     st.markdown("Upload CSV or Excel files and ask questions about your data using AI with LangGraph! All column names and descriptions will be in English.")
 
     # Get API key from Streamlit secrets
